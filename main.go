@@ -3,6 +3,8 @@ package main
 import (
 	"encoding/csv"
 	"fmt"
+	"io"
+	"log"
 	"os"
 	"strconv"
 	"strings"
@@ -15,10 +17,11 @@ const dateFormat = "1/2/2006"
 
 type Trade struct {
 	Time       time.Time
+	IsSell     bool
 	TopInst    Instrument
 	BottomInst Instrument
-	TopAmt     int64
-	BottomAmt  int64
+	TopAmt     DotEight
+	BottomAmt  DotEight
 }
 
 type HistoricalPrice struct {
@@ -27,7 +30,7 @@ type HistoricalPrice struct {
 }
 
 type Entry struct {
-	ID     int
+	ID     string
 	Action string
 	Date   string
 	Pair   string
@@ -42,6 +45,9 @@ type Instrument string
 func (de DotEight) ToString() string {
 	left := de / 1e8
 	right := de % 1e8
+	if right < 0 {
+		right = -right
+	}
 	return fmt.Sprintf("%d.%d", left, right)
 }
 
@@ -60,7 +66,7 @@ func ToDotEight(s string) DotEight {
 		panic(fmt.Sprintf("invalid string for DotEight: %s\n", s))
 	}
 	right := 0
-	if len(comps == 2) {
+	if len(comps) == 2 {
 		rightStr := (comps[1] + "00000000")[0:8]
 		right, err = strconv.Atoi(rightStr)
 		if err != nil {
@@ -72,17 +78,100 @@ func ToDotEight(s string) DotEight {
 	return DotEight(dotEight)
 }
 
-func (e *Entry) ToTrade() (*Trade, err) {
+func (e *Entry) ToTrade() *Trade {
 	trade := &Trade{}
+	if e.Action == "sell" {
+		trade.IsSell = true
+	} else if e.Action != "buy" {
+		panic(fmt.Sprintf("invalid B/S value: %s", e.Action))
+	}
 	t, err := time.Parse(dateFormat, e.Date)
+	if err != nil {
+		panic(err)
+	}
 	trade.Time = t
-	trade.TopInst = Instrument(strings.ToLower(c.Pair[0:3]))
-	trade.BottomInst = Instrument(strings.ToLower(c.Pair[3:3]))
+	trade.TopInst = Instrument(strings.ToLower(e.Pair[0:3]))
+	trade.BottomInst = Instrument(strings.ToLower(e.Pair[4:7]))
 	trade.TopAmt = ToDotEight(e.Amt1)
-	trade.BotAmt = ToDotEight(e.Amt2)
+	trade.BottomAmt = ToDotEight(e.Amt2)
 	return trade
 }
 
-func main() {
+type Account map[Instrument]DotEight
 
+func (a Account) String() string {
+	str := "{\n"
+	for k, v := range a {
+		str = str + "\t" + string(k) + ":" + v.ToString() + "\n"
+	}
+	return str + "}\n"
+}
+
+type Args struct {
+	TradesCSV string `long:"trades" required:"true"`
+}
+
+func main() {
+	a := Args{}
+	parser := flags.NewParser(&a, flags.Default)
+	_, err := parser.Parse()
+	if err != nil {
+		if err, ok := err.(*flags.Error); ok && err.Type == flags.ErrHelp {
+			os.Exit(0)
+		} else {
+			log.Fatalln(err)
+		}
+	}
+
+	f, err := os.Open(a.TradesCSV)
+	if err != nil {
+		panic(err)
+	}
+
+	r := csv.NewReader(f)
+	trades := []*Trade{}
+	for {
+		record, err := r.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			panic(err)
+		}
+		entry := Entry{
+			ID:     record[0],
+			Action: strings.ToLower(record[1]),
+			Date:   record[2],
+			Pair:   record[3],
+			Amt1:   record[4],
+			Amt2:   record[5],
+			Fee:    record[6],
+		}
+
+		trades = append(trades, entry.ToTrade())
+	}
+
+	accounts := Account{}
+	for _, t := range trades {
+		TopBalance, ok := accounts[t.TopInst]
+		if !ok {
+			TopBalance = DotEight(0)
+		}
+		BotBalance, ok := accounts[t.BottomInst]
+		if !ok {
+			BotBalance = DotEight(0)
+		}
+
+		if t.IsSell {
+			TopBalance -= t.TopAmt
+			BotBalance += t.BottomAmt
+		} else {
+			TopBalance += t.TopAmt
+			BotBalance -= t.BottomAmt
+		}
+		accounts[t.TopInst] = TopBalance
+		accounts[t.BottomInst] = BotBalance
+	}
+
+	fmt.Println(accounts.String())
 }
