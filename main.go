@@ -6,7 +6,6 @@ import (
 	"io"
 	"log"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -15,18 +14,8 @@ import (
 
 const dateFormat = "1/2/2006"
 
-type Trade struct {
-	Time       time.Time
-	IsSell     bool
-	TopInst    Instrument
-	BottomInst Instrument
-	TopAmt     DotEight
-	BottomAmt  DotEight
-}
-
 type HistoricalPrice struct {
-	Time           time.Time
-	TopAmtDotEight int64
+	Time time.Time
 }
 
 type Entry struct {
@@ -39,44 +28,7 @@ type Entry struct {
 	Fee    string
 }
 
-type DotEight int64
 type Instrument string
-
-func (de DotEight) ToString() string {
-	left := de / 1e8
-	right := de % 1e8
-	if right < 0 {
-		right = -right
-	}
-	return fmt.Sprintf("%d.%d", left, right)
-}
-
-func (de DotEight) ToFloat64() float64 {
-	return float64(de) / 1e8
-}
-
-func ToDotEight(s string) DotEight {
-	comps := strings.Split(s, ".")
-	if len(comps) > 2 {
-		panic(fmt.Sprintf("invalid string for DotEight: %s\n", s))
-	}
-
-	left, err := strconv.Atoi(comps[0])
-	if err != nil {
-		panic(fmt.Sprintf("invalid string for DotEight: %s\n", s))
-	}
-	right := 0
-	if len(comps) == 2 {
-		rightStr := (comps[1] + "00000000")[0:8]
-		right, err = strconv.Atoi(rightStr)
-		if err != nil {
-			panic(fmt.Sprintf("invalid string for DotEight: %s\n", s))
-		}
-	}
-	dotEight := int64(left) * int64(1e8)
-	dotEight = dotEight + int64(right)
-	return DotEight(dotEight)
-}
 
 func (e *Entry) ToTrade() *Trade {
 	trade := &Trade{}
@@ -108,7 +60,14 @@ func (a Account) String() string {
 }
 
 type Args struct {
-	TradesCSV string `long:"trades" required:"true"`
+	TradesCSV        string     `long:"trades" required:"true"`
+	BaseInst         Instrument `long:"base" default:"usd"`
+	HistoricalPrices string     `long:"prices"`
+}
+
+func GetHistoricalPrice(top, bottom Instrument, t time.Time) DotEight {
+	// TODO:
+	return ToDotEight("3000")
 }
 
 func main() {
@@ -148,10 +107,18 @@ func main() {
 			Fee:    record[6],
 		}
 
-		trades = append(trades, entry.ToTrade())
+		t := entry.ToTrade()
+		if t.BottomInst != a.BaseInst {
+			trades = append(trades, t.Split(a.BaseInst, GetHistoricalPrice(t.TopInst, a.BaseInst, t.Time))...)
+		} else {
+			trades = append(trades, t)
+		}
 	}
 
 	accounts := Account{}
+	buys := map[Instrument]*LotMatches{}
+	sells := map[Instrument]*LotMatches{}
+
 	for _, t := range trades {
 		TopBalance, ok := accounts[t.TopInst]
 		if !ok {
@@ -163,14 +130,50 @@ func main() {
 		}
 
 		if t.IsSell {
+			var matches *LotMatches
+			if matches, ok = sells[t.TopInst]; !ok {
+				matches = NewLotMatches()
+				sells[t.TopInst] = matches
+			}
+			matches.Insert(t)
 			TopBalance -= t.TopAmt
 			BotBalance += t.BottomAmt
 		} else {
+			var matches *LotMatches
+			if matches, ok = buys[t.TopInst]; !ok {
+				matches = NewLotMatches()
+				buys[t.TopInst] = matches
+			}
+			matches.Insert(t)
 			TopBalance += t.TopAmt
 			BotBalance -= t.BottomAmt
 		}
 		accounts[t.TopInst] = TopBalance
 		accounts[t.BottomInst] = BotBalance
+	}
+
+	for inst, b := range buys {
+		if string(inst) != "btc" {
+			continue
+		}
+		fmt.Println("currency:", inst)
+		s := sells[inst]
+		s.Prepare()
+		b.Prepare()
+
+		pandl := DotEight(0)
+
+		for _, t := range s.budgets {
+			l, err := b.MatchTrade(&t)
+			if err != nil {
+				panic(err)
+			}
+			for _, lot := range l {
+				fmt.Println("match:", lot.String())
+				pandl += lot.PandL
+			}
+		}
+		fmt.Println("PANDL: $", pandl.ToString())
 	}
 
 	fmt.Println(accounts.String())
