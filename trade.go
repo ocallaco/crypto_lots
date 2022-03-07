@@ -27,19 +27,17 @@ func (t *Trade) Price() DotEight {
 
 // if we swapped 2 non-USD instruments directly, we need to translate into a trade of Top for USD and USD for Bot
 func (t *Trade) Split(baseInst Instrument, basePrice DotEight, useBottom bool) []*Trade {
-	var fee, baseAmt DotEight
+	var baseAmt DotEight
+	fee := t.FeeAmt // fee is additional cost in Bottom Inst
 
 	if useBottom {
 		baseAmt = t.BottomAmt.Mul(basePrice)
-		fee = t.FeeAmt.Mul(basePrice)
 	} else {
 		baseAmt = t.TopAmt.Mul(basePrice)
-		// if using price of top inst, we need to translate the fee into the base Inst via the top inst
-		fee = t.FeeAmt.Mul(t.TopAmt.Div(t.BottomAmt)).Mul(basePrice) // TODO: test for correctness
 	}
 
 	if t.IsSell {
-		fee = -fee
+		fee = -fee // if we're selling, then we're receiving less of the bottom inst, if we're buying, we're spending more
 	}
 
 	return []*Trade{
@@ -50,7 +48,7 @@ func (t *Trade) Split(baseInst Instrument, basePrice DotEight, useBottom bool) [
 			TopInst:    t.TopInst,
 			BottomInst: baseInst,
 			TopAmt:     t.TopAmt,
-			BottomAmt:  baseAmt + fee,
+			BottomAmt:  baseAmt,
 		},
 		&Trade{
 			ID:         t.ID + "_right",
@@ -58,7 +56,7 @@ func (t *Trade) Split(baseInst Instrument, basePrice DotEight, useBottom bool) [
 			IsSell:     !t.IsSell,
 			TopInst:    t.BottomInst,
 			BottomInst: baseInst,
-			TopAmt:     t.BottomAmt,
+			TopAmt:     t.BottomAmt + fee, // fee only attached to right-side trade (not as FeeAmt since that's in the bottom inst)
 			BottomAmt:  baseAmt,
 		},
 	}
