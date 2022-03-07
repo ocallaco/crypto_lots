@@ -9,13 +9,23 @@ import (
 
 type DotEight int64
 
+const oneDotEight = DotEight(1e8)
+
 func (de DotEight) ToString() string {
-	left := de / 1e8
-	right := de % 1e8
+	sign := ""
+	if de < 0 {
+		sign = "-"
+	}
+	n := int64(de)
+	if n < 0 {
+		n = -n
+	}
+	left := n / 1e8
+	right := n % 1e8
 	if right < 0 {
 		right = -right
 	}
-	return fmt.Sprintf("%d.%08d", left, right)
+	return fmt.Sprintf("%s%d.%08d", sign, left, right)
 }
 
 func (de DotEight) ToFloat64() float64 {
@@ -46,6 +56,10 @@ func (de DotEight) Div(de2 DotEight) DotEight {
 	rem.Div(rem, b2)
 	res.Add(res, rem)
 	return DotEight(res.Int64())
+}
+
+func (de DotEight) Recip() DotEight {
+	return oneDotEight.Div(de)
 }
 
 func ToDotEight(s string) DotEight {

@@ -25,5 +25,4 @@ func TestDotEightOperations(t *testing.T) {
 	de6 := DotEight(9223372036854775807) // int64 max
 	assert.Equal(t, "92233720368.54775807", de6.ToString())
 	assert.Equal(t, de6.ToString(), de6.Mul(de3).ToString())
-
 }

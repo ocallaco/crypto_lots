@@ -1,91 +1,148 @@
 package main
 
 import (
+	"encoding/csv"
 	"fmt"
+	"io"
+	"os"
 	"sort"
-	"time"
 )
+
+type Lot struct {
+	Buy    *Trade
+	Sell   *Trade
+	BuyPx  DotEight
+	SellPx DotEight
+	Amt    DotEight
+	PandL  DotEight
+}
+
+func (l *Lot) String() string {
+	return fmt.Sprintf("%+v\t%+v\t%s\t%s\t%s\t$%s", l.Buy.Time.Format(dateFormat), l.Sell.Time.Format(dateFormat), l.Amt.ToString(), l.BuyPx.ToString(), l.SellPx.ToString(), l.PandL.ToString())
+}
 
 type LotBudget struct {
 	Trade     *Trade
 	Remaining DotEight
 }
 
-type LotMatches struct {
-	index   int
-	budgets []LotBudget
+type LotReport struct {
+	Buy  string
+	Sell string
 }
 
-func (lm *LotMatches) Len() int {
-	return len(lm.budgets)
-}
-
-func (lm *LotMatches) Less(i, j int) bool {
-	return lm.budgets[i].Trade.Time.Before(lm.budgets[j].Trade.Time)
-}
-
-func (lm *LotMatches) Swap(i, j int) {
-	lm.budgets[i], lm.budgets[j] = lm.budgets[j], lm.budgets[i]
-}
-
-func (lm *LotMatches) Insert(trade *Trade) {
-	lb := LotBudget{
-		Trade:     trade,
-		Remaining: trade.TopAmt,
+func ReadLotReports(pth string) ([]LotReport, error) {
+	reports := make([]LotReport, 0)
+	f, err := os.Open(pth)
+	if err != nil {
+		return nil, err
 	}
-	lm.budgets = append(lm.budgets, lb)
-}
-
-func (lm *LotMatches) Prepare() {
-	sort.Sort(lm)
-	lm.index = 0
-}
-
-type Lot struct {
-	Start time.Time
-	End   time.Time
-	PandL DotEight
-}
-
-func (l Lot) String() string {
-	return fmt.Sprintf("%+v-%+v : $%s", l.Start, l.End, l.PandL.ToString())
-}
-
-func (lm *LotMatches) MatchTrade(b *LotBudget) ([]Lot, error) {
-	// TODO: don't allow matching against new trades
-	if lm.index < 0 {
-		return nil, fmt.Errorf("not prepared")
-	}
-	i := lm.index
-	res := []Lot{}
-	unitBasis := b.Trade.BottomAmt.Div(b.Trade.TopAmt)
-	for b.Remaining > 0 {
-		if len(lm.budgets) < i {
-			return nil, fmt.Errorf("ran out of trades to match")
+	r := csv.NewReader(f)
+	for {
+		record, err := r.Read()
+		if err == io.EOF {
+			break
 		}
-		nextLot := lm.budgets[i]
-		nextLotBasis := nextLot.Trade.BottomAmt.Div(nextLot.Trade.TopAmt)
-
-		lotAmt := b.Remaining
-		if nextLot.Remaining <= b.Remaining {
-			lotAmt = nextLot.Remaining
-			i++
+		if err != nil {
+			return nil, err
 		}
-		nextLot.Remaining -= lotAmt
-		b.Remaining -= lotAmt
-		res = append(res, Lot{
-			Start: nextLot.Trade.Time,
-			End:   b.Trade.Time,
-			PandL: unitBasis.Mul(lotAmt) - nextLotBasis.Mul(lotAmt),
+		if len(record) < 2 {
+			return nil, fmt.Errorf("bad lot report record: %+v", record)
+		}
+		reports = append(reports, LotReport{
+			Buy:  record[0],
+			Sell: record[1],
 		})
 	}
-	lm.index = i
-	return res, nil
+	return reports, nil
 }
 
-func NewLotMatches() *LotMatches {
-	return &LotMatches{
-		index:   -1,
-		budgets: make([]LotBudget, 0),
+func MatchTrades(trades []*Trade, LIFO bool, reportedLots []LotReport) ([]*Lot, error) {
+	buys := []*LotBudget{}
+	sells := []*LotBudget{}
+
+	idToBudget := map[string]*LotBudget{}
+
+	for _, t := range trades {
+		b := &LotBudget{
+			Trade:     t,
+			Remaining: t.TopAmt,
+		}
+		if t.IsSell {
+			sells = append(sells, b)
+		} else {
+			buys = append(buys, b)
+		}
+		idToBudget[t.ID] = b
+	}
+
+	sort.Slice(sells, func(i, j int) bool {
+		return sells[i].Trade.Time.Before(sells[j].Trade.Time)
+	})
+
+	if LIFO {
+		sort.Slice(buys, func(i, j int) bool {
+			return buys[j].Trade.Time.Before(buys[i].Trade.Time)
+		})
+	} else {
+		sort.Slice(buys, func(i, j int) bool {
+			return buys[i].Trade.Time.Before(buys[j].Trade.Time)
+		})
+	}
+
+	lots := []*Lot{}
+
+	for _, rep := range reportedLots {
+		buy, ok := idToBudget[rep.Buy]
+		if !ok {
+			if _, ok := idToBudget[rep.Sell]; ok {
+				return nil, fmt.Errorf("invalid reported lot Buy ID %s not present, but Sell is", rep.Buy)
+			}
+			// doesn't apply to this instrument, skip
+			continue
+		}
+		sell, ok := idToBudget[rep.Sell]
+		if !ok {
+			return nil, fmt.Errorf("invalid reported lot Sell ID %s not present but Buy is", rep.Sell)
+		}
+		lots = append(lots, MatchBuySell(buy, sell))
+	}
+
+	for _, sell := range sells {
+		if sell.Remaining == 0 {
+			continue
+		}
+		for _, buy := range buys {
+			if buy.Remaining == 0 || sell.Trade.Time.Before(buy.Trade.Time) {
+				continue
+			}
+			lots = append(lots, MatchBuySell(buy, sell))
+			if sell.Remaining == 0 {
+				break
+			}
+		}
+	}
+	sort.Slice(lots, func(i, j int) bool {
+		return lots[i].Sell.Time.Before(lots[j].Sell.Time)
+	})
+	return lots, nil
+}
+
+func MatchBuySell(buy, sell *LotBudget) *Lot {
+	soldPx := sell.Trade.Price()
+	costBasisPx := buy.Trade.Price()
+	lotAmt := sell.Remaining
+	if buy.Remaining < lotAmt {
+		lotAmt = buy.Remaining
+	}
+	sell.Remaining -= lotAmt
+	buy.Remaining -= lotAmt
+	return &Lot{
+		Buy:    buy.Trade,
+		Sell:   sell.Trade,
+		Amt:    lotAmt,
+		PandL:  soldPx.Mul(lotAmt) - costBasisPx.Mul(lotAmt),
+		BuyPx:  costBasisPx,
+		SellPx: soldPx,
 	}
 }

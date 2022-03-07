@@ -19,33 +19,48 @@ type HistoricalPrice struct {
 }
 
 type Entry struct {
-	ID     string
-	Action string
-	Date   string
-	Pair   string
-	Amt1   string
-	Amt2   string
-	Fee    string
+	ID       string
+	Action   string
+	Date     string
+	Pair     string
+	Amt1     string
+	Amt2     string
+	Fee      string
+	Exchange string
 }
-
-type Instrument string
 
 func (e *Entry) ToTrade() *Trade {
 	trade := &Trade{}
 	if e.Action == "sell" {
 		trade.IsSell = true
 	} else if e.Action != "buy" {
-		panic(fmt.Sprintf("invalid B/S value: %s", e.Action))
+		return nil
 	}
 	t, err := time.Parse(dateFormat, e.Date)
 	if err != nil {
 		panic(err)
 	}
 	trade.Time = t
-	trade.TopInst = Instrument(strings.ToLower(e.Pair[0:3]))
-	trade.BottomInst = Instrument(strings.ToLower(e.Pair[4:7]))
+	left, right, err := ReadPair(e.Pair)
+	if err != nil {
+		panic(err)
+	}
+
+	fee := e.Fee
+	if fee == "" {
+		fee = "0"
+	}
+	trade.ID = e.ID
+	trade.TopInst = left
+	trade.BottomInst = right
 	trade.TopAmt = ToDotEight(e.Amt1)
 	trade.BottomAmt = ToDotEight(e.Amt2)
+	trade.FeeAmt = ToDotEight(fee)
+	trade.Exchange = e.Exchange
+
+	if trade.TopAmt < 0 || trade.BottomAmt < 0 || trade.FeeAmt < 0 || trade.BottomAmt+trade.FeeAmt == 0 {
+		panic("illegal trade entry.  fees/amounts can't be negative (and fee + bottom can't be 0) -- Buy/Sell is sufficient")
+	}
 	return trade
 }
 
@@ -63,11 +78,9 @@ type Args struct {
 	TradesCSV        string     `long:"trades" required:"true"`
 	BaseInst         Instrument `long:"base" default:"usd"`
 	HistoricalPrices string     `long:"prices"`
-}
-
-func GetHistoricalPrice(top, bottom Instrument, t time.Time) DotEight {
-	// TODO:
-	return ToDotEight("3000")
+	LIFO             bool       `long:"lifo"`
+	Verbose          bool       `long:"verbose" short:"v"`
+	ReportedLots     string     `long:"reported-lots"`
 }
 
 func main() {
@@ -82,9 +95,22 @@ func main() {
 		}
 	}
 
+	ps, err := BuildPriceService(a.HistoricalPrices, Instrument("usd"))
+	if err != nil {
+		panic(err)
+	}
+
 	f, err := os.Open(a.TradesCSV)
 	if err != nil {
 		panic(err)
+	}
+
+	var reportedLots []LotReport
+	if a.ReportedLots != "" {
+		reportedLots, err = ReadLotReports(a.ReportedLots)
+		if err != nil {
+			panic(err)
+		}
 	}
 
 	r := csv.NewReader(f)
@@ -97,84 +123,69 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
+		exch := ""
+		if len(record) >= 8 {
+			exch = record[7]
+		}
 		entry := Entry{
-			ID:     record[0],
-			Action: strings.ToLower(record[1]),
-			Date:   record[2],
-			Pair:   record[3],
-			Amt1:   record[4],
-			Amt2:   record[5],
-			Fee:    record[6],
+			ID:       record[0],
+			Action:   strings.ToLower(record[1]),
+			Date:     record[2],
+			Pair:     record[3],
+			Amt1:     record[4],
+			Amt2:     record[5],
+			Fee:      record[6],
+			Exchange: exch,
 		}
 
 		t := entry.ToTrade()
+		if t == nil {
+			continue
+		}
 		if t.BottomInst != a.BaseInst {
-			trades = append(trades, t.Split(a.BaseInst, GetHistoricalPrice(t.TopInst, a.BaseInst, t.Time))...)
+			useBottom := false
+			px, err := ps.GetHistoricalPrice(t.TopInst, t.Time)
+			if err != nil {
+				px, err = ps.GetHistoricalPrice(t.BottomInst, t.Time)
+				if err != nil {
+					fmt.Printf("skipping trade: %s\n", err.Error())
+					continue
+				}
+				useBottom = true
+			}
+			if !useBottom && t.BottomAmt == 0 {
+				fmt.Printf("cannot split trade with 0 bottom amount %s\n", t.ID)
+				continue
+			}
+			trades = append(trades, t.Split(a.BaseInst, px, useBottom)...)
 		} else {
 			trades = append(trades, t)
 		}
 	}
+	if a.Verbose {
+		for _, t := range trades {
+			fmt.Println(t.String())
+		}
+	}
 
-	accounts := Account{}
-	buys := map[Instrument]*LotMatches{}
-	sells := map[Instrument]*LotMatches{}
-
+	subLists := map[Instrument][]*Trade{}
 	for _, t := range trades {
-		TopBalance, ok := accounts[t.TopInst]
+		inst := t.TopInst
+		list, ok := subLists[inst]
 		if !ok {
-			TopBalance = DotEight(0)
+			list = make([]*Trade, 0)
 		}
-		BotBalance, ok := accounts[t.BottomInst]
-		if !ok {
-			BotBalance = DotEight(0)
-		}
-
-		if t.IsSell {
-			var matches *LotMatches
-			if matches, ok = sells[t.TopInst]; !ok {
-				matches = NewLotMatches()
-				sells[t.TopInst] = matches
-			}
-			matches.Insert(t)
-			TopBalance -= t.TopAmt
-			BotBalance += t.BottomAmt
-		} else {
-			var matches *LotMatches
-			if matches, ok = buys[t.TopInst]; !ok {
-				matches = NewLotMatches()
-				buys[t.TopInst] = matches
-			}
-			matches.Insert(t)
-			TopBalance += t.TopAmt
-			BotBalance -= t.BottomAmt
-		}
-		accounts[t.TopInst] = TopBalance
-		accounts[t.BottomInst] = BotBalance
+		subLists[inst] = append(list, t)
 	}
 
-	for inst, b := range buys {
-		if string(inst) != "btc" {
-			continue
+	for inst, subTrades := range subLists {
+		fmt.Println("INST:", inst, len(subTrades))
+		lots, err := MatchTrades(subTrades, a.LIFO, reportedLots)
+		if err != nil {
+			panic(err)
 		}
-		fmt.Println("currency:", inst)
-		s := sells[inst]
-		s.Prepare()
-		b.Prepare()
-
-		pandl := DotEight(0)
-
-		for _, t := range s.budgets {
-			l, err := b.MatchTrade(&t)
-			if err != nil {
-				panic(err)
-			}
-			for _, lot := range l {
-				fmt.Println("match:", lot.String())
-				pandl += lot.PandL
-			}
+		for _, lot := range lots {
+			fmt.Println(lot.String())
 		}
-		fmt.Println("PANDL: $", pandl.ToString())
 	}
-
-	fmt.Println(accounts.String())
 }
