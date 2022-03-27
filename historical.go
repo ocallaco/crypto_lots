@@ -4,6 +4,7 @@ import (
 	"encoding/csv"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"os"
 	"path"
 	"time"
@@ -20,7 +21,7 @@ func BuildPriceService(pth string, base Instrument) (*PriceService, error) {
 		data: map[Instrument]PairHist{},
 	}
 
-	files, err := os.ReadDir(pth)
+	files, err := ioutil.ReadDir(pth)
 	if err != nil {
 		return nil, err
 	}
