@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"path"
 	"strings"
 	"time"
 
@@ -75,12 +76,15 @@ func (a Account) String() string {
 }
 
 type Args struct {
-	TradesCSV        string     `long:"trades" required:"true"`
-	BaseInst         Instrument `long:"base" default:"usd"`
-	HistoricalPrices string     `long:"prices"`
-	LIFO             bool       `long:"lifo"`
-	Verbose          bool       `long:"verbose" short:"v"`
-	ReportedLots     string     `long:"reported-lots"`
+	TradesCSV         string     `long:"trades" required:"true"`
+	BaseInst          Instrument `long:"base" default:"usd"`
+	HistoricalPrices  string     `long:"prices"`
+	FIFO              bool       `long:"fifo"`
+	Verbose           bool       `long:"verbose" short:"v"`
+	ReportedLots      string     `long:"reported-lots"`
+	OutDir            string     `long:"out-dir" default:"/tmp"`
+	StopDate          string     `long:"stop-date"`
+	WriteReportedLots bool       `long:"write-reported-lots"`
 }
 
 func main() {
@@ -111,6 +115,15 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
+	}
+
+	stopDateStr := a.StopDate
+	if stopDateStr == "" {
+		stopDateStr = time.Now().Format(dateFormat)
+	}
+	stopDate, err := time.Parse(dateFormat, stopDateStr)
+	if err != nil {
+		panic(err)
 	}
 
 	r := csv.NewReader(f)
@@ -175,17 +188,41 @@ func main() {
 		if !ok {
 			list = make([]*Trade, 0)
 		}
-		subLists[inst] = append(list, t)
+		if !t.Time.After(stopDate) {
+			subLists[inst] = append(list, t)
+		}
 	}
 
 	for inst, subTrades := range subLists {
-		fmt.Println("INST:", inst, len(subTrades))
-		lots, err := MatchTrades(subTrades, a.LIFO, reportedLots)
-		if err != nil {
-			panic(err)
-		}
-		for _, lot := range lots {
-			fmt.Println(lot.String())
-		}
+		func() {
+			fmt.Println("INST:", inst, len(subTrades))
+			lots, err := MatchTrades(subTrades, !a.FIFO, reportedLots)
+			if err != nil {
+				panic(err)
+			}
+			f, err := os.Create(path.Join(a.OutDir, string(inst)+".csv"))
+			if err != nil {
+				panic(err)
+			}
+			w := csv.NewWriter(f)
+			defer w.Flush()
+
+			if !a.WriteReportedLots {
+				w.Write([]string{
+					"Purchase Date",
+					"Date Sold",
+					"Proceeds",
+					"Cost Basis",
+					"Currency",
+				})
+				for _, lot := range lots {
+					w.Write(lot.CSV())
+				}
+			} else {
+				for _, lot := range lots {
+					w.Write(lot.ReportedLot())
+				}
+			}
+		}()
 	}
 }

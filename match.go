@@ -21,6 +21,14 @@ func (l *Lot) String() string {
 	return fmt.Sprintf("%+v\t%+v\t%s\t%s\t%s\t$%s", l.Buy.Time.Format(dateFormat), l.Sell.Time.Format(dateFormat), l.Amt.ToString(), l.BuyPx.ToString(), l.SellPx.ToString(), l.PandL.ToString())
 }
 
+func (l *Lot) CSV() []string {
+	return []string{l.Buy.Time.Format(dateFormat), l.Sell.Time.Format(dateFormat), l.Amt.Mul(l.SellPx).ToString(), l.Amt.Mul(l.BuyPx).ToString(), string(l.Buy.TopInst)}
+}
+
+func (l *Lot) ReportedLot() []string {
+	return []string{l.Buy.ID, l.Sell.ID}
+}
+
 type LotBudget struct {
 	Trade     *Trade
 	Remaining DotEight
