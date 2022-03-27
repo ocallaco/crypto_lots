@@ -29,7 +29,7 @@ func (l *Lot) CSV() []string {
 func (l *Lot) SHA() string {
 	w := sha1.New()
 	w.Write([]byte(l.String()))
-	return string(w.Sum(nil))
+	return fmt.Sprintf("%x", w.Sum(nil))
 }
 
 func (l *Lot) ReportedLot() []string {
