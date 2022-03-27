@@ -76,13 +76,11 @@ func (a Account) String() string {
 }
 
 type Args struct {
-	TradesCSV         string     `long:"trades" required:"true"`
+	Input             string     `long:"input" required:"true"`
 	BaseInst          Instrument `long:"base" default:"usd"`
-	HistoricalPrices  string     `long:"prices"`
 	FIFO              bool       `long:"fifo"`
 	Verbose           bool       `long:"verbose" short:"v"`
-	ReportedLots      string     `long:"reported-lots"`
-	OutDir            string     `long:"out-dir" default:"/tmp"`
+	OutDir            string     `long:"output" default:"/tmp"`
 	StopDate          string     `long:"stop-date"`
 	WriteReportedLots bool       `long:"write-reported-lots"`
 }
@@ -99,22 +97,30 @@ func main() {
 		}
 	}
 
-	ps, err := BuildPriceService(a.HistoricalPrices, Instrument("usd"))
+	//make sure base inst is lowercase
+	a.BaseInst = Instrument(strings.ToLower(string(a.BaseInst)))
+
+	tradesCsv := path.Join(a.Input, "trades.csv")
+	historicalPrices := path.Join(a.Input, "prices")
+
+	ps, err := BuildPriceService(historicalPrices, a.BaseInst)
 	if err != nil {
 		panic(err)
 	}
 
-	f, err := os.Open(a.TradesCSV)
+	f, err := os.Open(tradesCsv)
 	if err != nil {
 		panic(err)
 	}
+	defer f.Close()
 
 	var reportedLots []LotReport
-	if a.ReportedLots != "" {
-		reportedLots, err = ReadLotReports(a.ReportedLots)
-		if err != nil {
+	reportedLots, err = ReadLotReports(path.Join(a.Input, "reported_lots.csv"))
+	if err != nil {
+		if !os.IsNotExist(err) {
 			panic(err)
 		}
+		log.Println("no reported lots")
 	}
 
 	stopDateStr := a.StopDate
@@ -193,6 +199,17 @@ func main() {
 		}
 	}
 
+	var newReportedLots *csv.Writer
+	if a.WriteReportedLots {
+		reportFile, err := os.Create(path.Join(a.OutDir, "reported_lots.csv"))
+		if err != nil {
+			panic(err)
+		}
+		defer reportFile.Close()
+		newReportedLots = csv.NewWriter(reportFile)
+		defer newReportedLots.Flush()
+	}
+
 	for inst, subTrades := range subLists {
 		func() {
 			fmt.Println("INST:", inst, len(subTrades))
@@ -206,21 +223,20 @@ func main() {
 			}
 			w := csv.NewWriter(f)
 			defer w.Flush()
-
-			if !a.WriteReportedLots {
-				w.Write([]string{
-					"Purchase Date",
-					"Date Sold",
-					"Proceeds",
-					"Cost Basis",
-					"Currency",
-				})
+			w.Write([]string{
+				"Purchase Date",
+				"Date Sold",
+				"Proceeds",
+				"Cost Basis",
+				"Currency",
+				"Description",
+			})
+			for _, lot := range lots {
+				w.Write(lot.CSV())
+			}
+			if a.WriteReportedLots {
 				for _, lot := range lots {
-					w.Write(lot.CSV())
-				}
-			} else {
-				for _, lot := range lots {
-					w.Write(lot.ReportedLot())
+					newReportedLots.Write(lot.ReportedLot())
 				}
 			}
 		}()

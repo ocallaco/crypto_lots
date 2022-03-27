@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha1"
+	"encoding/base64"
 	"encoding/csv"
 	"fmt"
 	"io"
@@ -18,11 +20,17 @@ type Lot struct {
 }
 
 func (l *Lot) String() string {
-	return fmt.Sprintf("%+v\t%+v\t%s\t%s\t%s\t$%s", l.Buy.Time.Format(dateFormat), l.Sell.Time.Format(dateFormat), l.Amt.ToString(), l.BuyPx.ToString(), l.SellPx.ToString(), l.PandL.ToString())
+	return fmt.Sprintf("%+v\t%+v\t%s\t%s\t%s\t$%s\t%s", l.Buy.Time.Format(dateFormat), l.Sell.Time.Format(dateFormat), l.Amt.ToString(), l.BuyPx.ToString(), l.SellPx.ToString(), l.PandL.ToString())
 }
 
 func (l *Lot) CSV() []string {
-	return []string{l.Buy.Time.Format(dateFormat), l.Sell.Time.Format(dateFormat), l.Amt.Mul(l.SellPx).ToString(), l.Amt.Mul(l.BuyPx).ToString(), string(l.Buy.TopInst)}
+	return []string{l.Buy.Time.Format(dateFormat), l.Sell.Time.Format(dateFormat), l.Amt.Mul(l.SellPx).ToString(), l.Amt.Mul(l.BuyPx).ToString(), string(l.Buy.TopInst), l.SHA()}
+}
+
+func (l *Lot) SHA() string {
+	w := sha1.New()
+	w.Write([]byte(l.String()))
+	return base64.URLEncoding.EncodeToString(w.Sum(nil))
 }
 
 func (l *Lot) ReportedLot() []string {
