@@ -7,15 +7,17 @@ import (
 	"io"
 	"os"
 	"sort"
+	"strconv"
 )
 
 type Lot struct {
-	Buy    *Trade
-	Sell   *Trade
-	BuyPx  DotEight
-	SellPx DotEight
-	Amt    DotEight
-	PandL  DotEight
+	Buy            *Trade
+	Sell           *Trade
+	BuyPx          DotEight
+	SellPx         DotEight
+	Amt            DotEight
+	PandL          DotEight
+	PreviousReport bool
 }
 
 func (l *Lot) String() string {
@@ -23,7 +25,7 @@ func (l *Lot) String() string {
 }
 
 func (l *Lot) CSV() []string {
-	return []string{l.Buy.Time.Format(dateFormat), l.Sell.Time.Format(dateFormat), l.Amt.Mul(l.SellPx).ToString(), l.Amt.Mul(l.BuyPx).ToString(), string(l.Buy.TopInst), l.SHA()}
+	return []string{l.Buy.Time.Format(dateFormat), l.Sell.Time.Format(dateFormat), l.Amt.Mul(l.SellPx).ToString(), l.Amt.Mul(l.BuyPx).ToString(), string(l.Buy.TopInst), l.SHA(), strconv.FormatBool(l.PreviousReport)}
 }
 
 func (l *Lot) SHA() string {
@@ -33,7 +35,7 @@ func (l *Lot) SHA() string {
 }
 
 func (l *Lot) ReportedLot() []string {
-	return []string{l.Buy.ID, l.Sell.ID}
+	return []string{l.Buy.ID, l.Sell.ID, l.Amt.ToString()}
 }
 
 type LotBudget struct {
@@ -44,6 +46,7 @@ type LotBudget struct {
 type LotReport struct {
 	Buy  string
 	Sell string
+	Amt  DotEight
 }
 
 func ReadLotReports(pth string) ([]LotReport, error) {
@@ -61,12 +64,13 @@ func ReadLotReports(pth string) ([]LotReport, error) {
 		if err != nil {
 			return nil, err
 		}
-		if len(record) < 2 {
+		if len(record) < 3 {
 			return nil, fmt.Errorf("bad lot report record: %+v", record)
 		}
 		reports = append(reports, LotReport{
 			Buy:  record[0],
 			Sell: record[1],
+			Amt:  ToDotEight(record[2]),
 		})
 	}
 	return reports, nil
@@ -120,7 +124,9 @@ func MatchTrades(trades []*Trade, LIFO bool, reportedLots []LotReport) ([]*Lot, 
 		if !ok {
 			return nil, fmt.Errorf("invalid reported lot Sell ID %s not present but Buy is", rep.Sell)
 		}
-		lots = append(lots, MatchBuySell(buy, sell))
+		newL := MatchBuySell(buy, sell, rep.Amt)
+		newL.PreviousReport = true
+		lots = append(lots, newL)
 	}
 
 	for _, sell := range sells {
@@ -131,7 +137,7 @@ func MatchTrades(trades []*Trade, LIFO bool, reportedLots []LotReport) ([]*Lot, 
 			if buy.Remaining == 0 || sell.Trade.Time.Before(buy.Trade.Time) {
 				continue
 			}
-			lots = append(lots, MatchBuySell(buy, sell))
+			lots = append(lots, MatchBuySell(buy, sell, DotEight(0)))
 			if sell.Remaining == 0 {
 				break
 			}
@@ -143,10 +149,13 @@ func MatchTrades(trades []*Trade, LIFO bool, reportedLots []LotReport) ([]*Lot, 
 	return lots, nil
 }
 
-func MatchBuySell(buy, sell *LotBudget) *Lot {
+func MatchBuySell(buy, sell *LotBudget, amt DotEight) *Lot {
 	soldPx := sell.Trade.Price()
 	costBasisPx := buy.Trade.Price()
 	lotAmt := sell.Remaining
+	if amt > 0 {
+		lotAmt = amt
+	}
 	if buy.Remaining < lotAmt {
 		lotAmt = buy.Remaining
 	}
