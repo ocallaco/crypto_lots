@@ -229,7 +229,7 @@ func main() {
 				"Proceeds",
 				"Cost Basis",
 				"Currency",
-				"Description",
+				"Name",
 			})
 			for _, lot := range lots {
 				w.Write(lot.CSV())
