@@ -2,7 +2,6 @@ package main
 
 import (
 	"crypto/sha1"
-	"encoding/base64"
 	"encoding/csv"
 	"fmt"
 	"io"
@@ -30,7 +29,7 @@ func (l *Lot) CSV() []string {
 func (l *Lot) SHA() string {
 	w := sha1.New()
 	w.Write([]byte(l.String()))
-	return base64.URLEncoding.EncodeToString(w.Sum(nil))
+	return string(w.Sum(nil))
 }
 
 func (l *Lot) ReportedLot() []string {
