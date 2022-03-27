@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"sort"
-	"strconv"
 )
 
 type Lot struct {
@@ -25,7 +24,7 @@ func (l *Lot) String() string {
 }
 
 func (l *Lot) CSV() []string {
-	return []string{l.Buy.Time.Format(dateFormat), l.Sell.Time.Format(dateFormat), l.Amt.Mul(l.SellPx).ToString(), l.Amt.Mul(l.BuyPx).ToString(), string(l.Buy.TopInst), l.SHA(), strconv.FormatBool(l.PreviousReport)}
+	return []string{l.Buy.Time.Format(dateFormat), l.Sell.Time.Format(dateFormat), l.Amt.Mul(l.SellPx).ToString(), l.Amt.Mul(l.BuyPx).ToString(), string(l.Buy.TopInst), l.SHA()}
 }
 
 func (l *Lot) SHA() string {
