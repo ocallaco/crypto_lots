@@ -81,8 +81,16 @@ type Args struct {
 	FIFO              bool       `long:"fifo"`
 	Verbose           bool       `long:"verbose" short:"v"`
 	OutDir            string     `long:"output" default:"/tmp"`
+	StartDate         string     `long:"start-date"`
 	StopDate          string     `long:"stop-date"`
 	WriteReportedLots bool       `long:"write-reported-lots"`
+}
+
+func parseDateArg(argStr string, defaultTime time.Time) (time.Time, error) {
+	if argStr == "" {
+		return defaultTime, nil
+	}
+	return time.Parse(dateFormat, argStr)
 }
 
 func main() {
@@ -123,11 +131,11 @@ func main() {
 		log.Println("no reported lots")
 	}
 
-	stopDateStr := a.StopDate
-	if stopDateStr == "" {
-		stopDateStr = time.Now().Format(dateFormat)
+	stopDate, err := parseDateArg(a.StopDate, time.Now())
+	if err != nil {
+		panic(err)
 	}
-	stopDate, err := time.Parse(dateFormat, stopDateStr)
+	startDate, err := parseDateArg(a.StartDate, time.Time{})
 	if err != nil {
 		panic(err)
 	}
@@ -232,7 +240,9 @@ func main() {
 				"Name",
 			})
 			for _, lot := range lots {
-				w.Write(lot.CSV())
+				if !lot.Sell.Time.Before(startDate) { // only print lots on or after start date
+					w.Write(lot.CSV())
+				}
 			}
 			if a.WriteReportedLots {
 				for _, lot := range lots {

@@ -24,7 +24,12 @@ func (l *Lot) String() string {
 }
 
 func (l *Lot) CSV() []string {
-	return []string{l.Buy.Time.Format(dateFormat), l.Sell.Time.Format(dateFormat), l.Amt.Mul(l.SellPx).ToString(), l.Amt.Mul(l.BuyPx).ToString(), string(l.Buy.TopInst), l.SHA()}
+	return []string{l.Buy.Time.Format(dateFormat), l.Sell.Time.Format(dateFormat), l.Amt.Mul(l.SellPx).ToString(), l.Amt.Mul(l.BuyPx).ToString(), string(l.Buy.TopInst) + "/" + string(l.Buy.BottomInst), l.Name()}
+}
+
+func (l *Lot) Name() string {
+	//TopCur-BotCur_Amt_Date_Sha[0:4]
+	return fmt.Sprintf("%s-%s_%s_%s_%s", l.Sell.TopInst, l.Sell.BottomInst, l.Amt.ToString(), l.Sell.Time.Format(dateFormat), l.SHA()[0:4])
 }
 
 func (l *Lot) SHA() string {
